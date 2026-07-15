@@ -84,7 +84,7 @@ pub async fn test_arrow_compat(ch: Arc<ClickHouseContainer>) {
         .into_iter()
         .collect::<ClickHouseResult<Vec<_>>>()
         .unwrap();
-    assert!(queried_batches.len() == 3);
+    assert_eq!(queried_batches.len(), 3);
 
     for i in 0..queried_batches.len() {
         let row = &queried_batches[i];

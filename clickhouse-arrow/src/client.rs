@@ -1627,7 +1627,7 @@ impl Client<ArrowFormat> {
         let qid = qid.unwrap_or_default();
 
         let explain_receiver = options.explain.map(|explain_opts| {
-            let explain_query = format!("{} {}", explain_opts.build_prefix(), &*parsed_query);
+            let explain_query = format!("{} {}", explain_opts.build_prefix(), *parsed_query);
             let resolved_format = explain_opts.format.resolve(explain_opts.operation);
             self.spawn_explain_query(explain_query, params.clone(), resolved_format)
         });
