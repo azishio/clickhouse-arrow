@@ -1,11 +1,13 @@
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::pki_types::pem::{Error as PemError, PemObject};
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{self, ClientConfig, RootCertStore};
 
 use crate::constants::*;
@@ -68,12 +70,15 @@ impl Destination {
 pub(super) async fn connect_tls(
     addrs: &[SocketAddr],
     domain: Option<&str>,
+    cafile: Option<&Path>,
 ) -> Result<TlsStream<TcpStream>> {
     let domain: String =
         domain.as_ref().map_or_else(|| addrs[0].ip().to_string(), ToString::to_string);
     debug!(%domain, "Initiating TLS connection");
+
+    let root_store = root_store(cafile)?;
     let stream = connect_socket(addrs).await?;
-    tls_stream(domain, stream).await
+    tls_stream(domain, stream, root_store).await
 }
 
 /// Connects to `ClickHouse`'s native server port and configures common socket options.
@@ -108,9 +113,11 @@ pub(crate) async fn connect_socket(addrs: &[SocketAddr]) -> Result<TcpStream> {
 }
 
 // Helper function to facilitate TLS connection setup
-async fn tls_stream(domain: String, stream: TcpStream) -> Result<TlsStream<TcpStream>> {
-    let root_store = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.into() };
-
+async fn tls_stream(
+    domain: String,
+    stream: TcpStream,
+    root_store: RootCertStore,
+) -> Result<TlsStream<TcpStream>> {
     let mut tls_config =
         ClientConfig::builder().with_root_certificates(root_store).with_no_client_auth();
 
@@ -121,6 +128,42 @@ async fn tls_stream(domain: String, stream: TcpStream) -> Result<TlsStream<TcpSt
     let dnsname =
         ServerName::try_from(domain.clone()).map_err(|e| Error::InvalidDnsName(e.to_string()))?;
     Ok(connector.connect(dnsname, stream).await?)
+}
+
+fn root_store(cafile: Option<&Path>) -> Result<RootCertStore> {
+    if let Some(cafile) = cafile {
+        let map_pem_error = |error: PemError| match error {
+            PemError::Io(error) => Error::Io(error),
+            error => Error::MalformedConnectionInformation(format!(
+                "failed to parse CA file as PEM: {error}"
+            )),
+        };
+
+        let roots = CertificateDer::pem_file_iter(cafile)
+            .map_err(&map_pem_error)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(map_pem_error)?;
+
+        if roots.is_empty() {
+            return Err(Error::MalformedConnectionInformation(
+                "CA file contains no certificates".into(),
+            ));
+        }
+
+        roots.into_iter().try_fold(
+            webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect(),
+            |mut store: RootCertStore, root| {
+                store.add(root).map_err(|error| {
+                    Error::MalformedConnectionInformation(format!(
+                        "invalid certificate in CA file: {error}"
+                    ))
+                })?;
+                Ok(store)
+            },
+        )
+    } else {
+        Ok(webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect())
+    }
 }
 
 impl std::fmt::Display for Destination {
@@ -216,6 +259,16 @@ mod tests {
 
     // Helper to create Destination variants
     fn socket_addr() -> SocketAddr { SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9000) }
+
+    #[test]
+    fn test_root_store_with_custom_ca() {
+        let default_store = root_store(None).unwrap();
+        let cafile = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ca.pem"));
+        let custom_store = root_store(Some(cafile)).unwrap();
+
+        assert_eq!(default_store.len(), webpki_roots::TLS_SERVER_ROOTS.len());
+        assert_eq!(custom_store.len(), default_store.len() + 1);
+    }
 
     #[tokio::test]
     async fn test_resolve_socket_addrs() {

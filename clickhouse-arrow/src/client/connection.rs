@@ -188,7 +188,12 @@ impl<T: ClientFormat> Connection<T> {
         metadata: ClientMetadata,
     ) -> Result<ConnectState<T::Data>> {
         if options.use_tls {
-            let tls_stream = super::tcp::connect_tls(addrs, options.domain.as_deref()).await?;
+            let tls_stream = super::tcp::connect_tls(
+                addrs,
+                options.domain.as_deref(),
+                options.cafile.as_deref(),
+            )
+            .await?;
             Self::establish_connection(tls_stream, io_task, events, options, metadata).await
         } else {
             let tcp_stream = super::tcp::connect_socket(addrs).await?;
