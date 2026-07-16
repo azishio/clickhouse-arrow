@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::pki_types::pem::{Error as PemError, PemObject};
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{self, ClientConfig, RootCertStore};
 
@@ -132,32 +132,16 @@ async fn tls_stream(
 
 fn root_store(cafile: Option<&Path>) -> Result<RootCertStore> {
     if let Some(cafile) = cafile {
-        let map_pem_error = |error: PemError| match error {
-            PemError::Io(error) => Error::Io(error),
-            error => Error::MalformedConnectionInformation(format!(
-                "failed to parse CA file as PEM: {error}"
-            )),
-        };
-
-        let roots = CertificateDer::pem_file_iter(cafile)
-            .map_err(&map_pem_error)?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(map_pem_error)?;
+        let roots = CertificateDer::pem_file_iter(cafile)?.collect::<Result<Vec<_>, _>>()?;
 
         if roots.is_empty() {
-            return Err(Error::MalformedConnectionInformation(
-                "CA file contains no certificates".into(),
-            ));
+            return Err(Error::CaFileMissingCertificates);
         }
 
         roots.into_iter().try_fold(
             webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect(),
             |mut store: RootCertStore, root| {
-                store.add(root).map_err(|error| {
-                    Error::MalformedConnectionInformation(format!(
-                        "invalid certificate in CA file: {error}"
-                    ))
-                })?;
+                store.add(root).map_err(Error::CaFileInvalidCertificate)?;
                 Ok(store)
             },
         )
@@ -255,10 +239,27 @@ impl From<(Ipv6Addr, u16)> for Destination {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+    use tokio_rustls::rustls::pki_types::pem::Error as PemError;
+
     use super::*;
 
     // Helper to create Destination variants
     fn socket_addr() -> SocketAddr { SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9000) }
+
+    #[tokio::test]
+    async fn test_connect_tls_validates_ca_before_connecting() {
+        let cafile = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/missing-ca.pem"));
+        assert!(!cafile.exists());
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+
+        let result = connect_tls(&[addr], Some("localhost"), Some(cafile)).await;
+
+        assert!(matches!(
+            result,
+            Err(Error::CaFileLoad(PemError::Io(source)))
+                if source.kind() == std::io::ErrorKind::NotFound
+        ));
+    }
 
     #[test]
     fn test_root_store_with_custom_ca() {
@@ -268,6 +269,29 @@ mod tests {
 
         assert_eq!(default_store.len(), webpki_roots::TLS_SERVER_ROOTS.len());
         assert_eq!(custom_store.len(), default_store.len() + 1);
+    }
+
+    #[test]
+    fn test_root_store_reports_invalid_ca_files() {
+        let missing = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/missing-ca.pem"));
+        assert!(!missing.exists());
+        let error = root_store(Some(missing)).unwrap_err();
+        assert!(
+            matches!(error, Error::CaFileLoad(PemError::Io(source)) if source.kind() == std::io::ErrorKind::NotFound)
+        );
+
+        let malformed =
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/malformed-ca.pem"));
+        let error = root_store(Some(malformed)).unwrap_err();
+        assert!(matches!(error, Error::CaFileLoad(_)));
+
+        let invalid = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/invalid-ca.pem"));
+        let error = root_store(Some(invalid)).unwrap_err();
+        assert!(matches!(error, Error::CaFileInvalidCertificate(_)));
+
+        let without_certificates = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        let error = root_store(Some(without_certificates)).unwrap_err();
+        assert!(matches!(error, Error::CaFileMissingCertificates));
     }
 
     #[tokio::test]

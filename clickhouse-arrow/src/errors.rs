@@ -3,6 +3,9 @@ use std::num::TryFromIntError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
+use tokio_rustls::rustls::Error as RustlsError;
+use tokio_rustls::rustls::pki_types::pem::Error as PemError;
+
 use crate::Type;
 use crate::native::ServerError;
 
@@ -62,6 +65,7 @@ pub enum Error {
     OutgoingTimeout(String),
     #[error("Invalid DNS name: {0}")]
     InvalidDnsName(String),
+
     #[error("Unsupported setting type: {0}")]
     UnsupportedSettingType(String),
     #[error("Unsupported setting field type: {0}")]
@@ -102,6 +106,14 @@ pub enum Error {
     // RowBinary
     #[error(transparent)]
     BytesRead(#[from] bytes::TryGetError),
+
+    // CA file errors
+    #[error("failed to open, read, or parse CA file as PEM: {0}")]
+    CaFileLoad(#[from] PemError),
+    #[error("invalid certificate in CA file: {0}")]
+    CaFileInvalidCertificate(#[source] RustlsError),
+    #[error("CA file contains no certificates")]
+    CaFileMissingCertificates,
 }
 
 impl Error {
