@@ -42,6 +42,7 @@ just test-one e2e_arrow
 # Or
 cargo test --test e2e_arrow --features test-utils
 cargo test --test e2e_native --features test-utils
+cargo test --test e2e_tls --features test-utils
 
 # Run with output visible
 cargo test --features test-utils -- --nocapture

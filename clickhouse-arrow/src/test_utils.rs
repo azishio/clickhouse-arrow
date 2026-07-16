@@ -27,6 +27,7 @@ pub const PULL_TIMEOUT_SECS_ENV: &str = "CLICKHOUSE_PULL_TIMEOUT_SECS";
 
 const CLICKHOUSE_CONFIG_SRC: &str = "tests/bin/";
 const CLICKHOUSE_CONFIG_DEST: &str = "/etc/clickhouse-server/config.xml";
+const CLICKHOUSE_TEST_CONFIG_DEST: &str = "/etc/clickhouse-server/test-config/";
 
 // Env defaults
 const CLICKHOUSE_USER: &str = "clickhouse";
@@ -279,6 +280,10 @@ impl ClickHouseContainer {
                         conf.unwrap_or("config.xml")
                     ),
                     CLICKHOUSE_CONFIG_DEST,
+                ))
+                .with_mount(Mount::bind_mount(
+                    format!("{}/{CLICKHOUSE_CONFIG_SRC}", env!("CARGO_MANIFEST_DIR")),
+                    CLICKHOUSE_TEST_CONFIG_DEST,
                 ));
 
             // Add tmpfs mounts for benchmark mode (zero disk I/O)

@@ -3,6 +3,7 @@ pub mod compat;
 pub mod cross_client;
 pub mod native;
 pub mod params;
+pub mod tls;
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
